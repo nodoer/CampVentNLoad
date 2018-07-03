@@ -30,6 +30,45 @@ struct auxState
   bool aux2 = false;
 };
 
+//Struct options
+struct options{
+  //Set to true to turn silence the beep
+  boolean beepOff = false;
+};
+
+//Operation state struct
+struct opState{
+  int currentScreen;
+};
+
+//Ambient weather struct
+struct weather{
+  float inDewPoint = 0;
+  float inTemp = 0;
+  float inHumidity = 0;
+  float inPressure = 0;
+
+  float outDewPoint = 0;
+  float outTemp = 0;
+  float outHumidity = 0;
+  float outPressure = 0;
+}
+
+struct datetime{
+  int curHour;
+  int curMin;
+  int curSecond;
+  int curYear
+  int curMonth
+  int curDay
+};
+
+//Screen Names
+enum screen {
+  mainStatus = 0
+  ,
+};
+
 
 
 typedef struct voltages Voltages;
