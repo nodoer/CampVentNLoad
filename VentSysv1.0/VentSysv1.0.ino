@@ -78,11 +78,29 @@ struct options{
   //Set to true to turn silence the beep
   boolean beepOff = false;
   int mainDelay = 2000;
+  //The amount of cycles that will execute before the
+  //home screen is returned with no button presses
+  int keyPressDelay = 10000;
+};
+
+//Screen Names
+enum screen {
+   statusScreen
+  ,dateScreen
+  ,timeScreen
 };
 
 //Operation state struct
 struct opState{
-  int currentScreen = 0;
+  enum screen currentScreen = 0;
+   //The screen that will be returned to if a buttton is not
+   //pressed within the delay period.
+  enum screen timeoutScreen = 0;
+  int keyPressTimer = 0;
+  char lcdLine1[16];
+  char lcdLine2[16];
+  char lcdOldLine1[16];
+  char lcdOldLine2[16];
 };
 
 //Ambient weather struct
@@ -107,15 +125,6 @@ struct datetime{
   int curDay;
 };
 
-//Screen Names
-enum screen {
-  status = 0
-  ,date = 1
-  ,time = 2
-  ,
-};
-
-
 typedef struct btnState BtnState;
 typedef struct voltages Voltages;
 typedef struct auxState AuxState;
@@ -124,67 +133,29 @@ typedef struct opState OpState;
 typedef struct weather Weather;
 typedef struct datetime Datetime;
 
+
 Options opts;
+OpState state;
+
 
 /*************************************
  * Initialize LCD
  */
 LiquidCrystal595 lcd(pinLCDData,pinLCDEn,pinLCDClock);
 
-void setup() {
+void lcdUpdate(){
 
-  //Set pin Modes
-  pinMode(pinSRClock,OUTPUT);
-  pinMode(pinSRData,OUTPUT);
-  pinMode(pinBtnSREn,OUTPUT);
-  pinMode(pinBtnSRPLoad, OUTPUT);
+    if(state.lcdLine1 != state.lcdOldLine1){
+      lcd.setCursor(0,0);
+      lcd.print(state.lcdLine1);
+    }
 
-  //StartUp LCD
-  lcd.begin(16,2);
-  lcd.setLED2Pin(HIGH);
-
-  //Init the SR for Relay and Buzzer
-  digitalWrite(pinAuxSREn, LOW);
-  shiftOut(pinSRData , pinSRClock, MSBFIRST, B00001111);    
-  digitalWrite(pinAuxSREn, HIGH); 
-
-  // Print a message to the LCD.
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print(" Camp Power LLC ");
-  lcd.setCursor(0,1);
-  lcd.print("NY   2018   V0.1");
-  delay(opts.mainDelay);
-
-  //////////////////////////////////////////
-  // Start Self Test
-  //////////////////////////////////////////
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("    Begin     ");
-  lcd.setCursor(0,1);
-  lcd.print("  Self Test   ");
-  delay(opts.mainDelay);
-
-  
-
-}
-
-void loop() {
-
-  btnState buttons = readButtons();
-
-
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("    Begin     ");
-  lcd.setCursor(0,1);
-  lcd.print("  Self Test   ");
-  
-  
+    if(state.lcdLine1 != state.lcdOldLine1){
+      lcd.setCursor(0,1);
+      lcd.print(state.lcdLine2);
+    }
   
 }
-
 
 btnState readButtons(){
 
@@ -240,6 +211,91 @@ btnState readButtons(){
   return pressedBtns;
   
 }
+
+void setup() {
+
+  //Set pin Modes
+  pinMode(pinSRClock,OUTPUT);
+  pinMode(pinSRData,OUTPUT);
+  pinMode(pinBtnSREn,OUTPUT);
+  pinMode(pinBtnSRPLoad, OUTPUT);
+
+  //StartUp LCD
+  lcd.begin(16,2);
+  lcd.setLED2Pin(HIGH);
+
+  //Init the SR for Relay and Buzzer
+  digitalWrite(pinAuxSREn, LOW);
+  shiftOut(pinSRData , pinSRClock, MSBFIRST, B00001111);    
+  digitalWrite(pinAuxSREn, HIGH); 
+
+  // Print a message to the LCD.
+  sprintf(state.lcdLine1,"Brunet Power LLC");
+  sprintf(state.lcdLine2,"2018        V1.0");
+  lcdUpdate();
+  delay(opts.mainDelay);
+
+  //////////////////////////////////////////
+  // Start Self Test
+  //////////////////////////////////////////
+  sprintf(state.lcdLine1,"Begin           ");
+  sprintf(state.lcdLine2,"Self Testing    ");
+  lcdUpdate();
+  delay(opts.mainDelay);
+  
+
+}
+
+
+void loop() {
+ 
+  lcdUpdate();
+
+  btnState buttons = readButtons();
+  
+  if(buttons.btnPressed){
+
+    //Reset key press timer
+    state.keyPressTimer = 0;
+
+    
+    if(buttons.btn3 == 1){
+      state.currentScreen = state.currentScreen+1;
+    }
+    if(buttons.btn2 == 1){
+      state.currentScreen = state.currentScreen-1;
+    }
+  }
+
+
+  if(opts.keyPressDelay == state.keyPressTimer){
+    state.currentScreen = state.timeoutScreen;
+    lcd.setLED2Pin(LOW);
+  } else {
+    state.keyPressTimer++;
+  }
+
+  switch (state.currentScreen){
+
+    case statusScreen:
+      sprintf(state.lcdLine1,"Status         ");
+      sprintf(state.lcdLine2,"Normal %d      ", state.keyPressTimer);
+
+    break;
+
+    case dateScreen:
+      sprintf(state.lcdLine1,"Date            ");
+      sprintf(state.lcdLine2,"2018-01-01      ");
+    break;
+    
+  }
+  
+  
+  
+}
+
+
+
 
 long readVcc() {
   // Read 1.1V reference against AVcc
