@@ -1,3 +1,44 @@
+/*----------Shift Reg to LCD------------
+ * SR Pin 15  - ENABLE       10000000
+ * SR Pin 1   - D4           00000010 
+ * SR Pin 2   - D5           00000100
+ * SR Pin 3   - D6           00001000
+ * SR Pin 4   - D7           00010000
+ * SR Pin 5   - NC           00100000
+ * SR Pin 6   - LED BckLight 01000000
+ * SR Pin 7   - RS           00000001
+ * ----------------------------------- */
+
+#include <LiquidCrystal595.h>
+
+/**********************************************
+ * System Characteritics
+ */
+//Determines how wide a clock pulse is for shift registers
+#define PULSE_WIDTH_USEC   5
+
+/**********************************************
+ * Pin variable Mappings
+ */
+//Shift Register shared bus
+int pinSRClock = 6; //Shift register clock
+int pinSRData = 5; //Data in/out pin
+ 
+//Button Shift Register Pins
+int  pinBtnSREn = 7; //Enable pin on HC165
+int  pinBtnSRPLoad = 10; //PLoad/Shift on HC165 
+
+// LCD Shift Register Pins
+int pinLCDData = 2;
+int pinLCDEn = 3;
+int pinLCDClock = 4;
+
+//Aux Shift Register
+int pinAuxSREn = 9;
+
+/**********************************************
+ * Operational State Structure defs
+ */
 //Struct to store button state
 struct btnState
 {
@@ -7,7 +48,9 @@ struct btnState
   bool btn4 = false;
   bool btn5 = false;
   bool btn6 = false;
+  bool btn7 = false;
   bool btn8 = false;
+  bool btnPressed = false;
 };
 
 //Struct to store system voltages
@@ -34,11 +77,12 @@ struct auxState
 struct options{
   //Set to true to turn silence the beep
   boolean beepOff = false;
+  int mainDelay = 2000;
 };
 
 //Operation state struct
 struct opState{
-  int currentScreen;
+  int currentScreen = 0;
 };
 
 //Ambient weather struct
@@ -52,36 +96,149 @@ struct weather{
   float outTemp = 0;
   float outHumidity = 0;
   float outPressure = 0;
-}
+};
 
 struct datetime{
   int curHour;
   int curMin;
   int curSecond;
-  int curYear
-  int curMonth
-  int curDay
+  int curYear;
+  int curMonth;
+  int curDay;
 };
 
 //Screen Names
 enum screen {
-  mainStatus = 0
+  status = 0
+  ,date = 1
+  ,time = 2
   ,
 };
 
 
-
+typedef struct btnState BtnState;
 typedef struct voltages Voltages;
+typedef struct auxState AuxState;
+typedef struct options Options;
+typedef struct opState OpState;
+typedef struct weather Weather;
+typedef struct datetime Datetime;
 
+Options opts;
+
+/*************************************
+ * Initialize LCD
+ */
+LiquidCrystal595 lcd(pinLCDData,pinLCDEn,pinLCDClock);
 
 void setup() {
-  // put your setup code here, to run once:
+
+  //Set pin Modes
+  pinMode(pinSRClock,OUTPUT);
+  pinMode(pinSRData,OUTPUT);
+  pinMode(pinBtnSREn,OUTPUT);
+  pinMode(pinBtnSRPLoad, OUTPUT);
+
+  //StartUp LCD
+  lcd.begin(16,2);
+  lcd.setLED2Pin(HIGH);
+
+  //Init the SR for Relay and Buzzer
+  digitalWrite(pinAuxSREn, LOW);
+  shiftOut(pinSRData , pinSRClock, MSBFIRST, B00001111);    
+  digitalWrite(pinAuxSREn, HIGH); 
+
+  // Print a message to the LCD.
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print(" Camp Power LLC ");
+  lcd.setCursor(0,1);
+  lcd.print("NY   2018   V0.1");
+  delay(opts.mainDelay);
+
+  //////////////////////////////////////////
+  // Start Self Test
+  //////////////////////////////////////////
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("    Begin     ");
+  lcd.setCursor(0,1);
+  lcd.print("  Self Test   ");
+  delay(opts.mainDelay);
+
+  
 
 }
 
 void loop() {
-  
 
+  btnState buttons = readButtons();
+
+
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("    Begin     ");
+  lcd.setCursor(0,1);
+  lcd.print("  Self Test   ");
+  
+  
+  
+}
+
+
+btnState readButtons(){
+
+  btnState pressedBtns;
+  
+  pinMode(pinSRData,INPUT);
+
+  //Latch button inputs
+  digitalWrite(pinBtnSREn, HIGH);
+  digitalWrite(pinBtnSRPLoad, LOW);
+  delayMicroseconds(PULSE_WIDTH_USEC);
+  digitalWrite(pinBtnSRPLoad, HIGH);
+  digitalWrite(pinBtnSREn, LOW);
+
+  //Read button states from shift register
+  
+  for(int i = 0; i < 8; i++) {
+    
+        bool bitVal = digitalRead(pinSRData);
+
+        if (bitVal){
+          pressedBtns.btnPressed = true;
+        }
+
+        switch(i){
+          case 0:
+            pressedBtns.btn1 = bitVal;
+          case 1: 
+            pressedBtns.btn2 = bitVal;
+          case 2:
+            pressedBtns.btn3 = bitVal;
+          case 3:
+            pressedBtns.btn4 = bitVal;
+          case 4:
+            pressedBtns.btn5 = bitVal;
+          case 5:
+            pressedBtns.btn6 = bitVal;
+          case 6:
+            pressedBtns.btn7 = bitVal;
+          case 7:
+            pressedBtns.btn8 = bitVal; 
+        }
+
+
+        //Pulse clock to shift next bit out
+        digitalWrite(pinSRClock, HIGH);
+        delayMicroseconds(PULSE_WIDTH_USEC);
+        digitalWrite(pinSRClock, LOW);
+    }
+
+  pinMode(pinSRData,OUTPUT);
+  
+  return pressedBtns;
+  
 }
 
 long readVcc() {
