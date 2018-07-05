@@ -101,6 +101,9 @@ enum screen {
   ,relay2Screen
   ,relay3Screen
   ,relay4Screen
+  ,batteryScreen
+  ,fiveVoltScreen
+  ,threeVoltScreen
 };
 
 //Operation state struct
@@ -252,14 +255,15 @@ void auxUpdate(){
     out = out - B00001000;
   }
 
-  
+  if(axState.beep){
+    out = out + B00010000;
+  }
 
   digitalWrite(pinAuxSREn, LOW);
   shiftOut(pinSRDataOut, pinSRClock, MSBFIRST, out);    
   digitalWrite(pinAuxSREn, HIGH);  
   
 }
-
 
 
 void setup() {
@@ -283,7 +287,7 @@ void setup() {
   digitalWrite(pinAuxSREn, HIGH); 
 
   // Print a message to the LCD.
-  sprintf(state.lcdLine1,"Brunet Power LLC");
+  sprintf(state.lcdLine1,"Shiroda Power Co");
   sprintf(state.lcdLine2,"2018        V1.0");
   lcdUpdate();
   delay(opts.mainDelay);
