@@ -22,8 +22,9 @@
  */
 //Shift Register shared bus
 int pinSRClock = 6; //Shift register clock
-int pinSRData = 5; //Data in/out pin
- 
+int pinSRDataOut = 5; //Data in/out pin
+int pinSRDataIn = A2;
+
 //Button Shift Register Pins
 int  pinBtnSREn = 7; //Enable pin on HC165
 int  pinBtnSRPLoad = 10; //PLoad/Shift on HC165 
@@ -50,6 +51,14 @@ struct btnState
   bool btn6 = false;
   bool btn7 = false;
   bool btn8 = false;
+  bool btn1Last = false;
+  bool btn2Last = false;
+  bool btn3Last = false;
+  bool btn4Last = false;
+  bool btn5Last = false;
+  bool btn6Last = false;
+  bool btn7Last = false;
+  bool btn8Last = false;
   bool btnPressed = false;
 };
 
@@ -80,7 +89,7 @@ struct options{
   int mainDelay = 2000;
   //The amount of cycles that will execute before the
   //home screen is returned with no button presses
-  int keyPressDelay = 10000;
+  int keyPressDelay = 400;
 };
 
 //Screen Names
@@ -88,6 +97,10 @@ enum screen {
    statusScreen
   ,dateScreen
   ,timeScreen
+  ,relay1Screen
+  ,relay2Screen
+  ,relay3Screen
+  ,relay4Screen
 };
 
 //Operation state struct
@@ -133,10 +146,10 @@ typedef struct opState OpState;
 typedef struct weather Weather;
 typedef struct datetime Datetime;
 
-
 Options opts;
 OpState state;
-
+AuxState axState;
+BtnState buttons;
 
 /*************************************
  * Initialize LCD
@@ -157,12 +170,8 @@ void lcdUpdate(){
   
 }
 
-btnState readButtons(){
-
-  btnState pressedBtns;
-  
-  pinMode(pinSRData,INPUT);
-
+void readButtons(){
+ 
   //Latch button inputs
   digitalWrite(pinBtnSREn, HIGH);
   digitalWrite(pinBtnSRPLoad, LOW);
@@ -170,63 +179,107 @@ btnState readButtons(){
   digitalWrite(pinBtnSRPLoad, HIGH);
   digitalWrite(pinBtnSREn, LOW);
 
+  bool btnStates[8] = {buttons.btn1,buttons.btn2,buttons.btn3,
+                       buttons.btn4,buttons.btn5,buttons.btn6,
+                       buttons.btn7, buttons.btn8};
+
+  bool btnLastStates[8] = {buttons.btn1Last,buttons.btn2Last,buttons.btn3Last,
+                            buttons.btn4Last,buttons.btn5Last,buttons.btn6Last,
+                            buttons.btn7Last, buttons.btn8Last};
+
   //Read button states from shift register
   
   for(int i = 0; i < 8; i++) {
     
-        bool bitVal = digitalRead(pinSRData);
+        bool bitVal = digitalRead(pinSRDataIn);
 
         if (bitVal){
-          pressedBtns.btnPressed = true;
+          buttons.btnPressed = true;
         }
 
-        switch(i){
-          case 0:
-            pressedBtns.btn1 = bitVal;
-          case 1: 
-            pressedBtns.btn2 = bitVal;
-          case 2:
-            pressedBtns.btn3 = bitVal;
-          case 3:
-            pressedBtns.btn4 = bitVal;
-          case 4:
-            pressedBtns.btn5 = bitVal;
-          case 5:
-            pressedBtns.btn6 = bitVal;
-          case 6:
-            pressedBtns.btn7 = bitVal;
-          case 7:
-            pressedBtns.btn8 = bitVal; 
+        btnStates[i] = 0;
+        if(bitVal!=btnLastStates[i]){
+          btnStates[i] = bitVal;
+          btnLastStates[i] = btnStates[i];
         }
-
-
+        
         //Pulse clock to shift next bit out
         digitalWrite(pinSRClock, HIGH);
         delayMicroseconds(PULSE_WIDTH_USEC);
         digitalWrite(pinSRClock, LOW);
     }
 
-  pinMode(pinSRData,OUTPUT);
-  
-  return pressedBtns;
+    buttons.btn1=btnStates[0];
+    buttons.btn2=btnStates[1];
+    buttons.btn3=btnStates[2];
+    buttons.btn4=btnStates[3];
+    buttons.btn5=btnStates[4];
+    buttons.btn6=btnStates[5];
+    buttons.btn7=btnStates[6];
+    buttons.btn8=btnStates[7];
+
+    buttons.btn1Last=btnLastStates[0];
+    buttons.btn2Last=btnLastStates[1];
+    buttons.btn3Last=btnLastStates[2];
+    buttons.btn4Last=btnLastStates[3];
+    buttons.btn5Last=btnLastStates[4];
+    buttons.btn6Last=btnLastStates[5];
+    buttons.btn7Last=btnLastStates[6];
+    buttons.btn8Last=btnLastStates[7];
+
+ 
   
 }
+
+//Updates the state of the relays
+void auxUpdate(){
+
+  byte out = B00001111;
+
+  if(axState.rly1){
+    out = out - B00000001;
+  }
+
+  if(axState.rly2){
+    out = out - B00000010;
+  }
+
+  if(axState.rly3){
+    out = out - B00000100;
+  }
+
+  if(axState.rly4){
+    out = out - B00001000;
+  }
+
+  
+
+  digitalWrite(pinAuxSREn, LOW);
+  shiftOut(pinSRDataOut, pinSRClock, MSBFIRST, out);    
+  digitalWrite(pinAuxSREn, HIGH);  
+  
+}
+
+
 
 void setup() {
 
   //Set pin Modes
   pinMode(pinSRClock,OUTPUT);
-  pinMode(pinSRData,OUTPUT);
+  pinMode(pinSRDataOut,OUTPUT);
+  pinMode(pinSRDataIn,INPUT);
   pinMode(pinBtnSREn,OUTPUT);
   pinMode(pinBtnSRPLoad, OUTPUT);
+  pinMode(pinAuxSREn, OUTPUT);
 
   //StartUp LCD
   lcd.begin(16,2);
+  lcd.setLED1Pin(HIGH);
   lcd.setLED2Pin(HIGH);
 
   //Init the SR for Relay and Buzzer
   digitalWrite(pinAuxSREn, LOW);
-  shiftOut(pinSRData , pinSRClock, MSBFIRST, B00001111);    
+  shiftOut(pinSRDataOut , pinSRClock, MSBFIRST, B00001111);    
   digitalWrite(pinAuxSREn, HIGH); 
 
   // Print a message to the LCD.
@@ -247,24 +300,43 @@ void setup() {
 }
 
 
+
+
 void loop() {
  
   lcdUpdate();
 
-  btnState buttons = readButtons();
-  
+  readButtons();
+
+  auxUpdate();
+
   if(buttons.btnPressed){
+
+    buttons.btnPressed = false;
 
     //Reset key press timer
     state.keyPressTimer = 0;
 
-    
-    if(buttons.btn3 == 1){
+    //LCD Back Light ON
+    lcd.setLED2Pin(HIGH);
+
+    if(buttons.btn3){
       state.currentScreen = state.currentScreen+1;
     }
-    if(buttons.btn2 == 1){
+    if(buttons.btn2){
       state.currentScreen = state.currentScreen-1;
     }
+
+    if(buttons.btn8){
+      state.currentScreen = relay1Screen;
+      if(axState.rly1){
+        axState.rly1 = false;
+      } else {
+        axState.rly1 = true;
+        
+      }
+    }
+  
   }
 
 
@@ -286,6 +358,31 @@ void loop() {
     case dateScreen:
       sprintf(state.lcdLine1,"Date            ");
       sprintf(state.lcdLine2,"2018-01-01      ");
+    break;
+
+    case timeScreen:
+      sprintf(state.lcdLine1,"Time            ");
+      sprintf(state.lcdLine2,"19:01:01        ");
+    break;
+
+    case relay1Screen:
+      sprintf(state.lcdLine1,"Large Vent Fan  ");
+      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly1)?"ON":"OFF");
+    break;
+
+    case relay2Screen:
+      sprintf(state.lcdLine1,"Circulate Fans  ");
+      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly2)?"ON":"OFF");
+    break;
+
+    case relay3Screen:
+      sprintf(state.lcdLine1,"Kitchen Lights  ");
+      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly3)?"ON":"OFF");
+    break;
+
+    case relay4Screen:
+      sprintf(state.lcdLine1,"Bedroom Lights  ");
+      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly3)?"ON":"OFF");
     break;
     
   }

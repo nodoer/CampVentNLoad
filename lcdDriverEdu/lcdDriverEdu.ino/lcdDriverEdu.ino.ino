@@ -203,7 +203,7 @@ bme2.parameter.I2CAddress = 0x76;                    //I2C Address for Sensor 2 
     lcd.setCursor(0,1);
     lcd.print("NOT FOUND!");
     bme1Detected = 0;
-    while(1);
+    //while(1);
   }
 
   else
@@ -225,7 +225,7 @@ bme2.parameter.I2CAddress = 0x76;                    //I2C Address for Sensor 2 
     lcd.setCursor(0,1);
     lcd.print("NOT FOUND!");
     bme2Detected = 0;
-    while(1);
+    //while(1);
   }
 
   else
@@ -246,7 +246,7 @@ bme2.parameter.I2CAddress = 0x76;                    //I2C Address for Sensor 2 
     lcd.print("START UP FAIL!");
     lcd.setCursor(0,0);
     lcd.print("RTC NOT FOUND!");
-    while (1);
+    //while (1);
    } else {
     lcd.clear();
     lcd.setCursor(0,0);
