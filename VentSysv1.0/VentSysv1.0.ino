@@ -10,6 +10,9 @@
  * ----------------------------------- */
 
 #include <LiquidCrystal595.h>
+#include <Wire.h>
+#include "RTClib.h"
+#include "BlueDot_BME280.h"
 
 /**********************************************
  * System Characteritics
@@ -36,6 +39,8 @@ int pinLCDClock = 4;
 
 //Aux Shift Register
 int pinAuxSREn = 9;
+
+//
 
 /**********************************************
  * Operational State Structure defs
@@ -90,6 +95,14 @@ struct options{
   //The amount of cycles that will execute before the
   //home screen is returned with no button presses
   int keyPressDelay = 400;
+  //12Volt Calibration value, max range of measurement
+  float maxVoltage12 = 20.55;
+  float maxVoltage5 = 10.65;
+  int voltCheckInterval = 50;
+  float battCutoffVoltage = 12;
+  float battTurnOnVoltage = 13.7;
+  int lowBattShutdownTime = 5;
+  
 };
 
 //Screen Names
@@ -104,6 +117,8 @@ enum screen {
   ,batteryScreen
   ,fiveVoltScreen
   ,threeVoltScreen
+  ,battCutOutScreen
+  ,battRecoverScreen
 };
 
 //Operation state struct
@@ -113,32 +128,11 @@ struct opState{
    //pressed within the delay period.
   enum screen timeoutScreen = 0;
   int keyPressTimer = 0;
+  int voltCheckTimer = 0;
   char lcdLine1[16];
   char lcdLine2[16];
   char lcdOldLine1[16];
   char lcdOldLine2[16];
-};
-
-//Ambient weather struct
-struct weather{
-  float inDewPoint = 0;
-  float inTemp = 0;
-  float inHumidity = 0;
-  float inPressure = 0;
-
-  float outDewPoint = 0;
-  float outTemp = 0;
-  float outHumidity = 0;
-  float outPressure = 0;
-};
-
-struct datetime{
-  int curHour;
-  int curMin;
-  int curSecond;
-  int curYear;
-  int curMonth;
-  int curDay;
 };
 
 typedef struct btnState BtnState;
@@ -146,18 +140,34 @@ typedef struct voltages Voltages;
 typedef struct auxState AuxState;
 typedef struct options Options;
 typedef struct opState OpState;
-typedef struct weather Weather;
-typedef struct datetime Datetime;
+
 
 Options opts;
 OpState state;
 AuxState axState;
 BtnState buttons;
+Voltages voltState;
+
+DateTime timeState;
+
+/*************************************
+ * Init BME280 Sensors
+ */
+BlueDot_BME280 bme1;                                     //Object for Sensor 1
+BlueDot_BME280 bme2;                                     //Object for Sensor 2
+
+int bme1Detected = 0;                                    //Checks if Sensor 1 is available
+int bme2Detected = 0;                                    //Checks if Sensor 2 is available
 
 /*************************************
  * Initialize LCD
  */
 LiquidCrystal595 lcd(pinLCDData,pinLCDEn,pinLCDClock);
+
+/*************************************
+ * Init Real Yime Clock
+ */
+RTC_DS1307 rtc;
 
 void lcdUpdate(){
 
@@ -242,7 +252,7 @@ void auxUpdate(){
   if(axState.rly1){
     out = out - B00000001;
   }
-
+ 
   if(axState.rly2){
     out = out - B00000010;
   }
@@ -276,15 +286,43 @@ void setup() {
   pinMode(pinBtnSRPLoad, OUTPUT);
   pinMode(pinAuxSREn, OUTPUT);
 
+  //Do a volt check as soon as the loop starts
+  state.voltCheckTimer = opts.voltCheckInterval;
+
   //StartUp LCD
   lcd.begin(16,2);
   lcd.setLED1Pin(HIGH);
   lcd.setLED2Pin(HIGH);
 
+  //Setup BME280 Sensors
+  bme1.parameter.communication = 0;                    //I2C communication for Sensor 1 (bme1)
+  bme2.parameter.communication = 0;                    //I2C communication for Sensor 2 (bme2)
+  bme1.parameter.I2CAddress = 0x77;                    //I2C Address for Sensor 1 (bme1)
+  bme2.parameter.I2CAddress = 0x76;                    //I2C Address for Sensor 2 (bme2)
+  bme1.parameter.sensorMode = 0b11;                    //Setup Sensor mode for Sensor 1 0b11 Normal 0b01 Force (Could save power)
+  bme2.parameter.sensorMode = 0b11;                    //Setup Sensor mode for Sensor 2 
+  bme1.parameter.IIRfilter = 0b100;                    //IIR Filter for Sensor 1
+  bme2.parameter.IIRfilter = 0b100;                    //IIR Filter for Sensor 2
+  bme1.parameter.humidOversampling = 0b101;            //Humidity Oversampling for Sensor 1
+  bme2.parameter.humidOversampling = 0b101;            //Humidity Oversampling for Sensor 2
+  bme1.parameter.tempOversampling = 0b101;             //Temperature Oversampling for Sensor 1
+  bme2.parameter.tempOversampling = 0b101;             //Temperature Oversampling for Sensor 2
+  bme1.parameter.pressOversampling = 0b101;            //Pressure Oversampling for Sensor 1
+  bme2.parameter.pressOversampling = 0b101;            //Pressure Oversampling for Sensor 2 
+  bme1.parameter.pressureSeaLevel = 1013.25;            //default value of 1013.25 hPa (Sensor 1)
+  bme2.parameter.pressureSeaLevel = 1013.25;            //default value of 1013.25 hPa (Sensor 2)
+  bme1.parameter.tempOutsideCelsius = 15;               //default value of 15°C
+  bme2.parameter.tempOutsideCelsius = 15;               //default value of 15°C
+  bme1.parameter.tempOutsideFahrenheit = 59;            //default value of 59°F
+  bme2.parameter.tempOutsideFahrenheit = 59;            //default value of 59°F
+  
+
   //Init the SR for Relay and Buzzer
   digitalWrite(pinAuxSREn, LOW);
   shiftOut(pinSRDataOut , pinSRClock, MSBFIRST, B00001111);    
   digitalWrite(pinAuxSREn, HIGH); 
+
+  
 
   // Print a message to the LCD.
   sprintf(state.lcdLine1,"Shiroda Power Co");
@@ -298,7 +336,71 @@ void setup() {
   sprintf(state.lcdLine1,"Begin           ");
   sprintf(state.lcdLine2,"Self Testing    ");
   lcdUpdate();
+  axState.beep = true;auxUpdate();
+  delay(200);
+  axState.beep = false;auxUpdate();
+  delay(200);
+  axState.beep = true;auxUpdate();
+  delay(500);
+  axState.beep = false;auxUpdate();
   delay(opts.mainDelay);
+
+  //Start and Check for RTC
+  if (! rtc.begin()) {
+    sprintf(state.lcdLine1,"RTC Test Failed!");
+    sprintf(state.lcdLine2," RTC NOT FOUND! ");
+    lcdUpdate();
+    axState.beep = true;auxUpdate();
+    delay(500);
+    axState.beep = false;auxUpdate();
+    while (1);
+   } else {
+    sprintf(state.lcdLine1,"RTC Test Passed!");
+    sprintf(state.lcdLine2,"   RTC FOUND!   ");
+    lcdUpdate();
+    delay(opts.mainDelay);
+   }
+
+ //Check to see if the RTC is running if not set the time
+ if (! rtc.isrunning()) {
+    axState.beep = true;auxUpdate();
+    delay(500);
+    axState.beep = false;auxUpdate();
+    sprintf(state.lcdLine1,"RTC !!WARNING!! ");
+    sprintf(state.lcdLine2," Time is wrong! ");
+    lcdUpdate();
+    delay(opts.mainDelay/2);
+    sprintf(state.lcdLine1," Time is wrong! ");
+    sprintf(state.lcdLine2," Check RTC Batt ");
+    lcdUpdate();
+    delay(opts.mainDelay*2);
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+ //Start and Check for BME280 1 (Outdoor)
+ if (bme1.init() != 0x60){
+    sprintf(state.lcdLine1,"BME  280 OUTDOOR");
+    sprintf(state.lcdLine2,"   NOT FOUND!   ");
+    lcdUpdate();
+    axState.beep = true;auxUpdate();
+    delay(500);
+    axState.beep = false;auxUpdate();
+    //while (1);
+ } else {
+    sprintf(state.lcdLine1,"BME  280 OUTDOOR");
+    sprintf(state.lcdLine2,"     FOUND!     ");
+    lcdUpdate();
+    delay(opts.mainDelay);
+    bme2Detected = 1;
+ }
+
+
+   
+ sprintf(state.lcdLine1,"Self Testing    ");
+ sprintf(state.lcdLine2,"PASS!           ");
+ lcdUpdate();
+ delay(opts.mainDelay);
   
 
 }
@@ -307,12 +409,26 @@ void setup() {
 
 
 void loop() {
+
+  //Variable for formating floating numbers
+  char strFlt[3];
  
   lcdUpdate();
 
   readButtons();
 
   auxUpdate();
+
+  DateTime timeState = rtc.now();
+
+  state.voltCheckTimer++;
+  if(state.voltCheckTimer >= opts.voltCheckInterval){
+    state.voltCheckTimer = 0;
+    readVcc();
+    batteryCheck();
+  }
+  
+
 
   if(buttons.btnPressed){
 
@@ -361,12 +477,14 @@ void loop() {
 
     case dateScreen:
       sprintf(state.lcdLine1,"Date            ");
-      sprintf(state.lcdLine2,"2018-01-01      ");
+      sprintf(state.lcdLine2,"%4d-%02d-%02d      ", timeState.year()
+                , timeState.month(), timeState.day());
     break;
 
     case timeScreen:
       sprintf(state.lcdLine1,"Time            ");
-      sprintf(state.lcdLine2,"19:01:01        ");
+      sprintf(state.lcdLine2,"%02d:%02d:%02d      ", timeState.hour()
+                , timeState.minute(), timeState.second());
     break;
 
     case relay1Screen:
@@ -388,6 +506,35 @@ void loop() {
       sprintf(state.lcdLine1,"Bedroom Lights  ");
       sprintf(state.lcdLine2,"Status: %s      ", (axState.rly3)?"ON":"OFF");
     break;
+
+    case batteryScreen:
+      dtostrf(voltState.battery, 3, 1, strFlt);
+      sprintf(state.lcdLine1,"Pb Batt Voltage ");
+      sprintf(state.lcdLine2,"%s volts        ", strFlt);
+      
+    break;
+
+    case fiveVoltScreen:
+      dtostrf(voltState.rail5v, 3, 1, strFlt);
+      sprintf(state.lcdLine1,"5 Volt Rail     ");
+      sprintf(state.lcdLine2,"%s volts        ", strFlt);
+    break;
+
+    case threeVoltScreen:
+      dtostrf(voltState.rail3v3, 3, 1, strFlt);
+      sprintf(state.lcdLine1,"3v3 Volt Rail   ");
+      sprintf(state.lcdLine2,"%s volts        ", strFlt);
+    break;
+
+    case battCutOutScreen:
+      sprintf(state.lcdLine1,"Batt cuts off at");
+      sprintf(state.lcdLine2,"%d volts.       ", opts.battCutoffVoltage);
+    break;
+
+    case battRecoverScreen:
+      sprintf(state.lcdLine1,"Batt recovers at");
+      sprintf(state.lcdLine2,"%d volts        ", opts.battTurnOnVoltage);
+    break;
     
   }
   
@@ -396,20 +543,56 @@ void loop() {
 }
 
 
+void batteryCheck(){
 
+  
+  if(voltState.battery <= opts.battCutoffVoltage || true){
 
-long readVcc() {
+    lcdUpdate();
+
+    for(int i = opts.lowBattShutdownTime; i > 0; i--){
+      axState.beep = true;auxUpdate();
+      delay(100);
+      axState.beep = false;auxUpdate();
+      delay(900);
+      sprintf(state.lcdLine1,"LOW BATTERY!!!!!");
+      sprintf(state.lcdLine2,"%d seconds left ", i);
+      lcdUpdate();
+    }
+
+    //Kill everything the battery is low
+      axState.rly1 = false;
+      axState.rly2 = false;
+      axState.rly3 = false;
+      axState.rly4 = false;
+      axState.beep = false;
+      axState.aux1 = false;
+      axState.aux2 = false;
+      auxUpdate;
+    
+
+    do {
+      char percent[3];
+      float denom = opts.battTurnOnVoltage-opts.battCutoffVoltage;
+      float numer = opts.battTurnOnVoltage-voltState.battery;
+      dtostrf(((numer/denom)*100), 3, 0, percent);
+      sprintf(state.lcdLine1,"LOW BATT RECOVER");
+      sprintf(state.lcdLine2,"%s%% Recovered  ", percent);
+      lcdUpdate();
+      readVcc();
+      delay(5000);
+      
+    } while(voltState.battery <= opts.battTurnOnVoltage);
+
+    
+  }
+  
+}
+
+void readVcc() {
   // Read 1.1V reference against AVcc
   // set the reference to Vcc and the measurement to the internal 1.1V reference
-  #if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-    ADMUX = _BV(REFS0) | _BV(MUX4) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-  #elif defined (__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
-    ADMUX = _BV(MUX5) | _BV(MUX0);
-  #elif defined (__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
-    ADMUX = _BV(MUX3) | _BV(MUX2);
-  #else
     ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-  #endif  
 
   delay(2); // Wait for Vref to settle
   ADCSRA |= _BV(ADSC); // Start conversion
@@ -420,8 +603,31 @@ long readVcc() {
 
   long result = (high<<8) | low;
 
-  result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
-  return result; // Vcc in millivolts
+  float railVoltage = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
+
+  float railOffset = (railVoltage/1000) - 3.3;
+
+  float v12Factor = (opts.maxVoltage12+railOffset) / 3.3;
+  float v5Factor = (opts.maxVoltage5+railOffset) / 3.3;
+
+  delay(2); //wait for analog refs to settle
+  float v12Avg = 0;
+  for(int i = 0; i<20; i++){
+    v12Avg = v12Avg + analogRead(A0);
+  }
+  float v12Voltage = (v12Avg/20) * ((railVoltage/1000)*v12Factor / 1023.0);
+
+
+float v5Avg = 0;
+  for(int i = 0; i<20; i++){
+    v5Avg = v5Avg + analogRead(A1);
+  }
+  float v5Voltage = (v5Avg/20) * ((railVoltage/1000)*v5Factor / 1023.0);
+
+ voltState.rail3v3 = railVoltage/1000;
+ voltState.rail5v = v5Voltage;
+ voltState.battery = v12Voltage;
+  
 }
 
 
