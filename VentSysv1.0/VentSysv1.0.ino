@@ -83,8 +83,6 @@ struct auxState
   bool rly3 = false;
   bool rly4 = false;
   bool beep = false;
-  bool aux1 = false;
-  bool aux2 = false;
 };
 
 //Struct options
@@ -94,14 +92,15 @@ struct options{
   int mainDelay = 2000;
   //The amount of cycles that will execute before the
   //home screen is returned with no button presses
-  int keyPressDelay = 400;
+  float keyPressDelay = 400;
   //12Volt Calibration value, max range of measurement
   float maxVoltage12 = 20.55;
   float maxVoltage5 = 10.65;
-  int voltCheckInterval = 50;
   float battCutoffVoltage = 12;
   float battTurnOnVoltage = 13.7;
-  int lowBattShutdownTime = 5;
+  byte lowBattShutdownTime = 3;
+  byte exhaustMaxRunTime = 6;
+  
   
 };
 
@@ -119,6 +118,16 @@ enum screen {
   ,threeVoltScreen
   ,battCutOutScreen
   ,battRecoverScreen
+  ,outdoorTempC
+  ,outdoorTempF
+  ,outdoorHumidity
+  ,outdoorDewpoint
+  ,outdoorPressure
+  ,indoorTempC
+  ,indoorTempF
+  ,indoorHumidity
+  ,indoorDewpoint
+  ,indoorPressure
 };
 
 //Operation state struct
@@ -128,11 +137,9 @@ struct opState{
    //pressed within the delay period.
   enum screen timeoutScreen = 0;
   int keyPressTimer = 0;
-  int voltCheckTimer = 0;
-  char lcdLine1[16];
-  char lcdLine2[16];
-  char lcdOldLine1[16];
-  char lcdOldLine2[16];
+  float outdoorDewPoint = 0;
+  float indoorDewPoint = 0;
+  
 };
 
 typedef struct btnState BtnState;
@@ -148,6 +155,9 @@ AuxState axState;
 BtnState buttons;
 Voltages voltState;
 
+//Variable for formating floating numbers
+char strFlt[3];
+  
 DateTime timeState;
 
 /*************************************
@@ -169,18 +179,75 @@ LiquidCrystal595 lcd(pinLCDData,pinLCDEn,pinLCDClock);
  */
 RTC_DS1307 rtc;
 
-void lcdUpdate(){
-
-    if(state.lcdLine1 != state.lcdOldLine1){
+void lcdPrintLines(char line1[16], char line2[16]){
       lcd.setCursor(0,0);
-      lcd.print(state.lcdLine1);
-    }
-
-    if(state.lcdLine1 != state.lcdOldLine1){
+      lcd.print(line1);
       lcd.setCursor(0,1);
-      lcd.print(state.lcdLine2);
-    }
-  
+      lcd.print(line2);
+     
+}
+
+void lcdPrintFloatData(char line1[16], float data, char units[11]){
+      dtostrf(data, 3, 1, strFlt);
+      lcd.setCursor(0,0);
+      lcd.print(line1);
+      lcd.setCursor(0,1);
+      lcd.print(strFlt);
+      lcd.setCursor(4,1);
+      lcd.print(units);
+}
+
+void lcdPrintIntData(char line1[16], int data, char units[12]){
+      lcd.setCursor(0,0);
+      lcd.print(line1);
+      lcd.setCursor(0,1);
+      lcd.print(data);
+      if(data < 10){
+        lcd.print("  ");
+      } else if (data < 100) {
+        lcd.print(" ");
+      }
+      lcd.setCursor(3,1);
+      lcd.print(units);
+}
+
+void lcdPrintTime(){
+      DateTime timeState = rtc.now();
+      lcd.setCursor(0,0);
+      lcd.print("Time");
+      lcd.setCursor(0,1);
+      if(timeState.hour() < 10){
+        lcd.print("0");
+      }
+      lcd.print(timeState.hour());
+      lcd.print(":");
+      if(timeState.minute() < 10){
+        lcd.print("0");
+      }
+      lcd.print(timeState.minute());
+      lcd.print(":");
+      if(timeState.second() < 10){
+        lcd.print("0");
+      }
+      lcd.print(timeState.second());
+}
+
+void lcdPrintDate(){
+      DateTime timeState = rtc.now();
+      lcd.setCursor(0,0);
+      lcd.print("Date");
+      lcd.setCursor(0,1);
+      lcd.print(timeState.year());
+      lcd.print("-");
+      if(timeState.month() < 10){
+        lcd.print("0");
+      }
+      lcd.print(timeState.month());
+      lcd.print("-");
+      if(timeState.day() < 10){
+        lcd.print("0");
+      }
+      lcd.print(timeState.day());
 }
 
 void readButtons(){
@@ -275,7 +342,6 @@ void auxUpdate(){
   
 }
 
-
 void setup() {
 
   //Set pin Modes
@@ -286,8 +352,6 @@ void setup() {
   pinMode(pinBtnSRPLoad, OUTPUT);
   pinMode(pinAuxSREn, OUTPUT);
 
-  //Do a volt check as soon as the loop starts
-  state.voltCheckTimer = opts.voltCheckInterval;
 
   //StartUp LCD
   lcd.begin(16,2);
@@ -325,17 +389,15 @@ void setup() {
   
 
   // Print a message to the LCD.
-  sprintf(state.lcdLine1,"Shiroda Power Co");
-  sprintf(state.lcdLine2,"2018        V1.0");
-  lcdUpdate();
+  lcd.clear();
+  lcdPrintLines("Shiroda Power Co", "2018        V1.0");
   delay(opts.mainDelay);
 
   //////////////////////////////////////////
   // Start Self Test
   //////////////////////////////////////////
-  sprintf(state.lcdLine1,"Begin           ");
-  sprintf(state.lcdLine2,"Self Testing    ");
-  lcdUpdate();
+  lcd.clear();
+  lcdPrintLines("Begin", "Self Testing");
   axState.beep = true;auxUpdate();
   delay(200);
   axState.beep = false;auxUpdate();
@@ -347,17 +409,15 @@ void setup() {
 
   //Start and Check for RTC
   if (! rtc.begin()) {
-    sprintf(state.lcdLine1,"RTC Test Failed!");
-    sprintf(state.lcdLine2," RTC NOT FOUND! ");
-    lcdUpdate();
+    lcd.clear();
+    lcdPrintLines("RTC Test Failed!", " RTC NOT FOUND! ");
     axState.beep = true;auxUpdate();
     delay(500);
     axState.beep = false;auxUpdate();
     while (1);
    } else {
-    sprintf(state.lcdLine1,"RTC Test Passed!");
-    sprintf(state.lcdLine2,"   RTC FOUND!   ");
-    lcdUpdate();
+    lcd.clear();
+    lcdPrintLines("RTC Test Passed!", "   RTC FOUND!   ");
     delay(opts.mainDelay);
    }
 
@@ -366,13 +426,11 @@ void setup() {
     axState.beep = true;auxUpdate();
     delay(500);
     axState.beep = false;auxUpdate();
-    sprintf(state.lcdLine1,"RTC !!WARNING!! ");
-    sprintf(state.lcdLine2," Time is wrong! ");
-    lcdUpdate();
+    lcd.clear();
+    lcdPrintLines("RTC !!WARNING!! ", " Time is wrong! ");
     delay(opts.mainDelay/2);
-    sprintf(state.lcdLine1," Time is wrong! ");
-    sprintf(state.lcdLine2," Check RTC Batt ");
-    lcdUpdate();
+    lcd.clear();
+    lcdPrintLines(" Time is wrong! ", " Check RTC Batt ");
     delay(opts.mainDelay*2);
     // following line sets the RTC to the date & time this sketch was compiled
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
@@ -380,29 +438,40 @@ void setup() {
 
  //Start and Check for BME280 1 (Outdoor)
  if (bme1.init() != 0x60){
-    sprintf(state.lcdLine1,"BME  280 OUTDOOR");
-    sprintf(state.lcdLine2,"   NOT FOUND!   ");
-    lcdUpdate();
+    lcd.clear();
+    lcdPrintLines("BME  280 OUTDOOR", "   NOT FOUND!   ");
     axState.beep = true;auxUpdate();
     delay(500);
     axState.beep = false;auxUpdate();
-    //while (1);
+    while (1);
  } else {
-    sprintf(state.lcdLine1,"BME  280 OUTDOOR");
-    sprintf(state.lcdLine2,"     FOUND!     ");
-    lcdUpdate();
+    lcd.clear();
+    lcdPrintLines("BME  280 OUTDOOR", "     FOUND!     ");
+    delay(opts.mainDelay);
+    bme1Detected = 1;
+ }
+
+  //Start and Check for BME280 2 (Indoor)
+ if (bme2.init() != 0x60){
+    lcd.clear();
+    lcdPrintLines("BME  280  INDOOR", "   NOT FOUND!   ");
+    axState.beep = true;auxUpdate();
+    delay(500);
+    axState.beep = false;auxUpdate();
+    while (1);
+ } else {
+    lcd.clear();
+    lcdPrintLines("BME  280  INDOOR", "     FOUND!     ");
     delay(opts.mainDelay);
     bme2Detected = 1;
  }
 
 
-   
- sprintf(state.lcdLine1,"Self Testing    ");
- sprintf(state.lcdLine2,"PASS!           ");
- lcdUpdate();
+ lcd.clear();
+ lcdPrintLines("Self Testing", "Complete");
  delay(opts.mainDelay);
+ lcd.clear();
   
-
 }
 
 
@@ -410,28 +479,20 @@ void setup() {
 
 void loop() {
 
-  //Variable for formating floating numbers
-  char strFlt[3];
- 
-  lcdUpdate();
+  DateTime timeState = rtc.now();
 
   readButtons();
 
   auxUpdate();
 
-  DateTime timeState = rtc.now();
-
-  state.voltCheckTimer++;
-  if(state.voltCheckTimer >= opts.voltCheckInterval){
-    state.voltCheckTimer = 0;
-    readVcc();
-    batteryCheck();
-  }
   
 
+    readVcc();
+    batteryCheck();
+  
 
   if(buttons.btnPressed){
-
+    lcd.clear();
     buttons.btnPressed = false;
 
     //Reset key press timer
@@ -470,71 +531,77 @@ void loop() {
   switch (state.currentScreen){
 
     case statusScreen:
-      sprintf(state.lcdLine1,"Status         ");
-      sprintf(state.lcdLine2,"Normal %d      ", state.keyPressTimer);
-
+    lcdPrintIntData("Status", state.keyPressTimer, " ticks");         
     break;
 
     case dateScreen:
-      sprintf(state.lcdLine1,"Date            ");
-      sprintf(state.lcdLine2,"%4d-%02d-%02d      ", timeState.year()
-                , timeState.month(), timeState.day());
+    lcdPrintDate();
     break;
 
     case timeScreen:
-      sprintf(state.lcdLine1,"Time            ");
-      sprintf(state.lcdLine2,"%02d:%02d:%02d      ", timeState.hour()
-                , timeState.minute(), timeState.second());
+    lcdPrintTime();
     break;
 
     case relay1Screen:
-      sprintf(state.lcdLine1,"Large Vent Fan  ");
-      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly1)?"ON":"OFF");
+    lcdPrintLines("Large Vent Fan", (axState.rly1)?"ON":"OFF");
     break;
 
     case relay2Screen:
-      sprintf(state.lcdLine1,"Circulate Fans  ");
-      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly2)?"ON":"OFF");
+    lcdPrintLines("Circulate Fans", (axState.rly2)?"ON":"OFF");
     break;
 
     case relay3Screen:
-      sprintf(state.lcdLine1,"Kitchen Lights  ");
-      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly3)?"ON":"OFF");
+    lcdPrintLines("Kitchen Lights", (axState.rly3)?"ON":"OFF");
     break;
 
     case relay4Screen:
-      sprintf(state.lcdLine1,"Bedroom Lights  ");
-      sprintf(state.lcdLine2,"Status: %s      ", (axState.rly3)?"ON":"OFF");
+    lcdPrintLines("Bedroom Lights", (axState.rly4)?"ON":"OFF");
     break;
 
     case batteryScreen:
-      dtostrf(voltState.battery, 3, 1, strFlt);
-      sprintf(state.lcdLine1,"Pb Batt Voltage ");
-      sprintf(state.lcdLine2,"%s volts        ", strFlt);
-      
+    lcdPrintFloatData("Pb Batt Voltage", voltState.battery, " volts");
     break;
 
     case fiveVoltScreen:
-      dtostrf(voltState.rail5v, 3, 1, strFlt);
-      sprintf(state.lcdLine1,"5 Volt Rail     ");
-      sprintf(state.lcdLine2,"%s volts        ", strFlt);
+    lcdPrintFloatData("5 Volt Rail", voltState.rail5v, " volts");
     break;
 
     case threeVoltScreen:
-      dtostrf(voltState.rail3v3, 3, 1, strFlt);
-      sprintf(state.lcdLine1,"3v3 Volt Rail   ");
-      sprintf(state.lcdLine2,"%s volts        ", strFlt);
+    lcdPrintFloatData("3v3 Volt Rail", voltState.rail3v3, " volts");
     break;
 
     case battCutOutScreen:
-      sprintf(state.lcdLine1,"Batt cuts off at");
-      sprintf(state.lcdLine2,"%d volts.       ", opts.battCutoffVoltage);
+    lcdPrintFloatData("Batt cuts off at", opts.battCutoffVoltage, " volts");
     break;
 
     case battRecoverScreen:
-      sprintf(state.lcdLine1,"Batt recovers at");
-      sprintf(state.lcdLine2,"%d volts        ", opts.battTurnOnVoltage);
+    lcdPrintFloatData("Batt recovers at", opts.battTurnOnVoltage, " volts");
     break;
+
+    case outdoorTempC:
+    lcdPrintFloatData("Outdoor Temp", bme1.readTempC(), " C");
+    break;
+
+    case outdoorTempF:
+    lcdPrintFloatData("Outdoor Temp", bme1.readTempF(), " F");
+    break;
+
+    case outdoorHumidity:
+    lcdPrintIntData("Outdoor Humidity", bme1.readHumidity(), "%"); 
+    break;
+
+    case outdoorDewpoint:
+    break;
+
+    /*
+  ,outdoorDewpoint
+  ,outdoorPressure
+  ,indoorTempC
+  ,indoorTempF
+  ,indoorHumidity
+  ,indoorDewpoint
+  ,indoorPressure
+     */
     
   }
   
@@ -543,21 +610,19 @@ void loop() {
 }
 
 
+
 void batteryCheck(){
 
   
-  if(voltState.battery <= opts.battCutoffVoltage || true){
-
-    lcdUpdate();
+  if(voltState.battery <= opts.battCutoffVoltage){
 
     for(int i = opts.lowBattShutdownTime; i > 0; i--){
+      lcd.clear();
+      lcdPrintIntData("LOW BATTERY!!!!!", i, " seconds left"); 
       axState.beep = true;auxUpdate();
       delay(100);
       axState.beep = false;auxUpdate();
       delay(900);
-      sprintf(state.lcdLine1,"LOW BATTERY!!!!!");
-      sprintf(state.lcdLine2,"%d seconds left ", i);
-      lcdUpdate();
     }
 
     //Kill everything the battery is low
@@ -566,19 +631,22 @@ void batteryCheck(){
       axState.rly3 = false;
       axState.rly4 = false;
       axState.beep = false;
-      axState.aux1 = false;
-      axState.aux2 = false;
       auxUpdate;
     
 
     do {
-      char percent[3];
       float denom = opts.battTurnOnVoltage-opts.battCutoffVoltage;
-      float numer = opts.battTurnOnVoltage-voltState.battery;
-      dtostrf(((numer/denom)*100), 3, 0, percent);
-      sprintf(state.lcdLine1,"LOW BATT RECOVER");
-      sprintf(state.lcdLine2,"%s%% Recovered  ", percent);
-      lcdUpdate();
+      float numer = voltState.battery-opts.battCutoffVoltage;
+      float recoPercent = ((numer/denom)*100);
+
+      if(recoPercent<0){
+          lcd.clear();
+          lcdPrintFloatData("LOW BATTERY", voltState.battery, " volts"); 
+      } else {
+          lcd.clear();
+          lcdPrintIntData("BATT RECOVERING", recoPercent, "% Recovered");
+      }
+      
       readVcc();
       delay(5000);
       
