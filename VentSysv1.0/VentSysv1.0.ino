@@ -78,28 +78,42 @@ struct voltages
 //Struct to store the state of the aux shift register
 struct auxState
 {
-  bool rly1 = false;
-  bool rly2 = false;
-  bool rly3 = false;
-  bool rly4 = false;
   bool beep = false;
+
+  int rly1MinTimer = 0;
+  int rly2MinTimer = 0;
+  int rly3MinTimer = 0;
+  int rly4MinTimer = 0;
+
 };
 
 //Struct options
 struct options{
   //Set to true to turn silence the beep
-  boolean beepOff = false;
-  int mainDelay = 2000;
+    boolean beepOff = false;
+  //The delay for setup screens in milliseconds
+    int mainDelay = 2000;
   //The amount of cycles that will execute before the
   //home screen is returned with no button presses
-  float keyPressDelay = 400;
+    int keyPressDelay = 2000;
   //12Volt Calibration value, max range of measurement
-  float maxVoltage12 = 20.55;
-  float maxVoltage5 = 10.65;
-  float battCutoffVoltage = 12;
-  float battTurnOnVoltage = 13.7;
-  byte lowBattShutdownTime = 3;
-  byte exhaustMaxRunTime = 6;
+    float maxVoltage12 = 20.55;
+  //5Volt Calibration value
+    float maxVoltage5 = 10.65;
+  //The voltage at which the system will stop running loads
+    float battCutoffVoltage = 12;
+  //The voltage at which the system will start running loads
+  //after it has stopped running
+    float battTurnOnVoltage = 13.7;
+  //The number of seconds the system will beep before
+  //shutting down due to a low battery
+    byte lowBattShutdownTime = 3;
+  //When in scan mode this is the number of cycles each screen 
+  //will display for
+    int scanModeDelay = 100;
+    
+  //The max number of hours the vent fan can run  
+    byte ventFanMaxRunTime = 6;
   
   
 };
@@ -107,6 +121,7 @@ struct options{
 //Screen Names
 enum screen {
    statusScreen
+  ,bypassScreen
   ,dateScreen
   ,timeScreen
   ,relay1Screen
@@ -121,14 +136,21 @@ enum screen {
   ,outdoorTempC
   ,outdoorTempF
   ,outdoorHumidity
-  ,outdoorDewpoint
+  ,outdoorDewpointC
+  ,outdoorDewpointF
   ,outdoorPressure
   ,indoorTempC
   ,indoorTempF
   ,indoorHumidity
-  ,indoorDewpoint
+  ,indoorDewpointC
+  ,indoorDewpointF
   ,indoorPressure
+  ,ventRunTimeScreen
+  ,dewPointDiffScreen
+  
 };
+
+byte numOfScreens = 27;
 
 //Operation state struct
 struct opState{
@@ -139,7 +161,13 @@ struct opState{
   int keyPressTimer = 0;
   float outdoorDewPoint = 0;
   float indoorDewPoint = 0;
-  
+  bool scanMode = false;
+  int scanTimer = 0;
+  bool actionPressed = false; 
+  int bypassMinTimer = 0;
+  byte currentMinute = 0;
+  byte currentDay = 0;
+  byte ventRunTimer = 0;
 };
 
 typedef struct btnState BtnState;
@@ -187,13 +215,16 @@ void lcdPrintLines(char line1[16], char line2[16]){
      
 }
 
-void lcdPrintFloatData(char line1[16], float data, char units[11]){
+void lcdPrintFloatData(char line1[16], float data, char units[11], bool isTemp = false){
       dtostrf(data, 3, 1, strFlt);
       lcd.setCursor(0,0);
       lcd.print(line1);
       lcd.setCursor(0,1);
       lcd.print(strFlt);
       lcd.setCursor(4,1);
+      if(isTemp){
+        lcd.print((char)223);
+      }
       lcd.print(units);
 }
 
@@ -268,19 +299,22 @@ void readButtons(){
                             buttons.btn7Last, buttons.btn8Last};
 
   //Read button states from shift register
+
+  buttons.btnPressed = false;
   
   for(int i = 0; i < 8; i++) {
     
         bool bitVal = digitalRead(pinSRDataIn);
 
-        if (bitVal){
-          buttons.btnPressed = true;
-        }
+        
 
         btnStates[i] = 0;
         if(bitVal!=btnLastStates[i]){
           btnStates[i] = bitVal;
           btnLastStates[i] = btnStates[i];
+          if(bitVal){
+            buttons.btnPressed = true;
+          }
         }
         
         //Pulse clock to shift next bit out
@@ -316,19 +350,19 @@ void auxUpdate(){
 
   byte out = B00001111;
 
-  if(axState.rly1){
+  if(axState.rly1MinTimer){
     out = out - B00000001;
   }
  
-  if(axState.rly2){
+  if(axState.rly2MinTimer){
     out = out - B00000010;
   }
 
-  if(axState.rly3){
+  if(axState.rly3MinTimer){
     out = out - B00000100;
   }
 
-  if(axState.rly4){
+  if(axState.rly4MinTimer){
     out = out - B00001000;
   }
 
@@ -339,6 +373,102 @@ void auxUpdate(){
   digitalWrite(pinAuxSREn, LOW);
   shiftOut(pinSRDataOut, pinSRClock, MSBFIRST, out);    
   digitalWrite(pinAuxSREn, HIGH);  
+  
+}
+
+float dewpoint(float temp, float humidity){
+    double gamma = log(humidity / 100) + ((17.62 * temp) / (243.5 + temp));
+    return (243.5 * gamma / (17.62 - gamma));
+}
+
+
+void readVcc() {
+  // Read 1.1V reference against AVcc
+  // set the reference to Vcc and the measurement to the internal 1.1V reference
+    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+
+  delay(2); // Wait for Vref to settle
+  ADCSRA |= _BV(ADSC); // Start conversion
+  while (bit_is_set(ADCSRA,ADSC)); // measuring
+
+  uint8_t low  = ADCL; // must read ADCL first - it then locks ADCH  
+  uint8_t high = ADCH; // unlocks both
+
+  long result = (high<<8) | low;
+
+  float railVoltage = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
+
+  float railOffset = (railVoltage/1000) - 3.3;
+
+  float v12Factor = (opts.maxVoltage12+railOffset) / 3.3;
+  float v5Factor = (opts.maxVoltage5+railOffset) / 3.3;
+
+  delay(2); //wait for analog refs to settle
+  float v12Avg = 0;
+  for(int i = 0; i<20; i++){
+    v12Avg = v12Avg + analogRead(A0);
+  }
+  float v12Voltage = (v12Avg/20) * ((railVoltage/1000)*v12Factor / 1023.0);
+
+
+float v5Avg = 0;
+  for(int i = 0; i<20; i++){
+    v5Avg = v5Avg + analogRead(A1);
+  }
+  float v5Voltage = (v5Avg/20) * ((railVoltage/1000)*v5Factor / 1023.0);
+
+ voltState.rail3v3 = railVoltage/1000;
+ voltState.rail5v = v5Voltage;
+ voltState.battery = v12Voltage;
+  
+}
+
+
+void batteryCheck(){
+
+  
+  if(voltState.battery <= opts.battCutoffVoltage){
+
+    for(int i = opts.lowBattShutdownTime; i > 0; i--){
+      lcd.clear();
+      lcdPrintIntData("LOW BATTERY!!!!!", i, " seconds left"); 
+      axState.beep = true;auxUpdate();
+      delay(100);
+      axState.beep = false;auxUpdate();
+      delay(900);
+    }
+
+    //Kill everything the battery is low
+      axState.rly1MinTimer = 0;
+      axState.rly2MinTimer = 0;
+      axState.rly3MinTimer = 0;
+      axState.rly4MinTimer = 0;
+      axState.beep = false;
+      auxUpdate;
+    
+
+    do {
+      float denom = opts.battTurnOnVoltage-opts.battCutoffVoltage;
+      float numer = voltState.battery-opts.battCutoffVoltage;
+      float recoPercent = ((numer/denom)*100);
+
+      if(recoPercent<0){
+          lcd.clear();
+          lcdPrintFloatData("LOW BATTERY", voltState.battery, " volts"); 
+      } else {
+          lcd.clear();
+          lcdPrintIntData("BATT RECOVERING", recoPercent, "% Recovered");
+      }
+      
+      readVcc();
+      delay(5000);
+      
+    } while(voltState.battery <= opts.battTurnOnVoltage);
+
+    lcd.clear();
+
+    
+  }
   
 }
 
@@ -361,8 +491,8 @@ void setup() {
   //Setup BME280 Sensors
   bme1.parameter.communication = 0;                    //I2C communication for Sensor 1 (bme1)
   bme2.parameter.communication = 0;                    //I2C communication for Sensor 2 (bme2)
-  bme1.parameter.I2CAddress = 0x77;                    //I2C Address for Sensor 1 (bme1)
-  bme2.parameter.I2CAddress = 0x76;                    //I2C Address for Sensor 2 (bme2)
+  bme1.parameter.I2CAddress = 0x76;                    //I2C Address for Sensor 1 (bme1)
+  bme2.parameter.I2CAddress = 0x77;                    //I2C Address for Sensor 2 (bme2)
   bme1.parameter.sensorMode = 0b11;                    //Setup Sensor mode for Sensor 1 0b11 Normal 0b01 Force (Could save power)
   bme2.parameter.sensorMode = 0b11;                    //Setup Sensor mode for Sensor 2 
   bme1.parameter.IIRfilter = 0b100;                    //IIR Filter for Sensor 1
@@ -474,53 +604,143 @@ void setup() {
   
 }
 
+void updateTimers(){
+
+  if(state.bypassMinTimer > 0){
+    state.bypassMinTimer--;
+  }
+
+  if(axState.rly1MinTimer > 0){
+    axState.rly1MinTimer--;
+  }
+  
+  if(axState.rly2MinTimer > 0){
+    axState.rly2MinTimer--;
+  }
+
+  if(axState.rly3MinTimer > 0){
+    axState.rly3MinTimer--;
+    if (axState.rly3MinTimer < 2){
+      lightsOutBeep();
+      lightsOutBeep();
+      lightsOutBeep();
+      state.currentScreen = relay3Screen;
+    } else if (axState.rly3MinTimer < 5){
+      lightsOutBeep();
+      lightsOutBeep();
+      state.currentScreen = relay3Screen;
+    }else if (axState.rly3MinTimer < 10){
+      lightsOutBeep();
+      state.currentScreen = relay3Screen;
+    }
+  }
+
+  if(axState.rly4MinTimer > 0){
+    axState.rly4MinTimer--;
+    if (axState.rly4MinTimer < 2){
+      lightsOutBeep();
+      lightsOutBeep();
+      lightsOutBeep();
+      state.currentScreen = relay4Screen;
+    } else if (axState.rly4MinTimer < 5){
+      lightsOutBeep();
+      lightsOutBeep();
+      state.currentScreen = relay4Screen;
+    }else if (axState.rly4MinTimer < 10){
+      lightsOutBeep();
+      state.currentScreen = relay4Screen;
+    }
+  }
+  
+}
+
+void lightsOutBeep(){
+  beep(100);
+  beep(100);
+  beep(100);
+  beep(200);
+}
+
+void beep(int beepLen){
+    axState.beep = true;auxUpdate();
+    delay(beepLen/2);
+    axState.beep = false;auxUpdate();
+    delay(beepLen/2);
+}
 
 
+void lcdNoAction(){
+  if(state.actionPressed){
+    lcdPrintLines("No action on", "this screen.");
+    delay(500);
+    lcd.clear();
+  }
+}
 
 void loop() {
 
   DateTime timeState = rtc.now();
 
   readButtons();
-
   auxUpdate();
-
+  readVcc();
+  batteryCheck();
   
 
-    readVcc();
-    batteryCheck();
-  
+  state.outdoorDewPoint = dewpoint(bme1.readTempC(), bme1.readHumidity());
+  state.indoorDewPoint = dewpoint(bme2.readTempC(), bme2.readHumidity());
 
-  if(buttons.btnPressed){
-    lcd.clear();
-    buttons.btnPressed = false;
-
-    //Reset key press timer
-    state.keyPressTimer = 0;
-
-    //LCD Back Light ON
-    lcd.setLED2Pin(HIGH);
-
-    if(buttons.btn3){
-      state.currentScreen = state.currentScreen+1;
-    }
-    if(buttons.btn2){
-      state.currentScreen = state.currentScreen-1;
-    }
-
-    if(buttons.btn8){
-      state.currentScreen = relay1Screen;
-      if(axState.rly1){
-        axState.rly1 = false;
-      } else {
-        axState.rly1 = true;
-        
-      }
-    }
-  
+  //if the minute has changed update all of the minute counters
+  if(timeState.second() != state.currentMinute){
+    updateTimers();
+    state.currentMinute = timeState.second();
   }
 
+  //if the day has changed reset daily counters
+  if(timeState.day() != state.currentDay){
+    state.ventRunTimer = 0;
+    state.currentDay = timeState.day();
+    
+  }
+  
 
+  //Check to see if the fans should be on because of dew point
+  if (!state.bypassMinTimer && opts.ventFanMaxRunTime != state.ventRunTimer){
+
+    //Added one to make the transition more stable
+    if((state.outdoorDewPoint+1) < state.indoorDewPoint 
+        && !axState.rly1MinTimer
+        && !axState.rly2MinTimer){
+
+          state.ventRunTimer++;
+          axState.rly1MinTimer = 60;
+          axState.rly2MinTimer = 60;
+          
+    }
+    
+  }
+
+  //if scan mode is on check the timer and switch screens
+  if(state.scanMode){
+    state.keyPressTimer = 0;
+    if(state.scanTimer == opts.scanModeDelay){
+      state.currentScreen = state.currentScreen+1;
+      state.scanTimer = 0;
+      lcd.clear();
+    }
+
+    state.scanTimer++;
+  }
+  
+  //Make sure the screens do not go past the max
+  if(state.currentScreen > numOfScreens-1){
+    state.currentScreen = 0;
+  } else if (state.currentScreen < 0){
+    state.currentScreen = numOfScreens-1;
+  }
+  
+
+  //Resets the display if key presses stop
   if(opts.keyPressDelay == state.keyPressTimer){
     state.currentScreen = state.timeoutScreen;
     lcd.setLED2Pin(LOW);
@@ -531,31 +751,97 @@ void loop() {
   switch (state.currentScreen){
 
     case statusScreen:
-    lcdPrintIntData("Status", state.keyPressTimer, " ticks");         
+    lcdPrintLines("System ON       ", "                ");         
+    break;
+
+    case bypassScreen:
+    if(state.bypassMinTimer){
+      lcdPrintFloatData("Bypass Mode", (float)state.bypassMinTimer/60, " hours left.");
+    } else {
+      lcdPrintLines("Bypass mode", "is off.         ");
+    }
+
+    if(state.actionPressed){
+      state.bypassMinTimer = state.bypassMinTimer + 1440;
+      if (state.bypassMinTimer > 5760 ){
+        state.bypassMinTimer = 0;
+      }
+    } 
+             
     break;
 
     case dateScreen:
     lcdPrintDate();
+    lcdNoAction();
     break;
 
     case timeScreen:
     lcdPrintTime();
+    lcdNoAction();
     break;
 
     case relay1Screen:
-    lcdPrintLines("Large Vent Fan", (axState.rly1)?"ON":"OFF");
+    if(axState.rly1MinTimer){
+      lcdPrintIntData("Large Vent Fan", axState.rly1MinTimer , " mins left");
+    } else {
+      lcdPrintLines("Large Vent Fan", "is off.        ");
+    }
+    
+    if(state.actionPressed){
+
+      axState.rly1MinTimer = axState.rly1MinTimer + 10;
+      if(axState.rly1MinTimer > 130){
+        axState.rly1MinTimer = 120;
+      }
+    }
     break;
 
     case relay2Screen:
-    lcdPrintLines("Circulate Fans", (axState.rly2)?"ON":"OFF");
+    if(axState.rly2MinTimer){
+      lcdPrintIntData("Circulate Fans", axState.rly2MinTimer , " mins left");
+    } else {
+      lcdPrintLines("Circulate Fans", "are off.        ");
+    }
+    
+    if(state.actionPressed){
+
+      axState.rly2MinTimer = axState.rly2MinTimer + 10;
+      if(axState.rly2MinTimer > 130){
+        axState.rly2MinTimer = 120;
+      }
+    }
     break;
 
     case relay3Screen:
-    lcdPrintLines("Kitchen Lights", (axState.rly3)?"ON":"OFF");
+    if(axState.rly3MinTimer){
+      lcdPrintFloatData("Kitchen Lights", (float)axState.rly3MinTimer/60 , " hours left");
+    } else {
+      lcdPrintLines("Kitchen Lights", "are off.         ");
+    }
+
+    if(state.actionPressed){
+      axState.rly3MinTimer = axState.rly3MinTimer + 720;
+      if (axState.rly3MinTimer > 5760 ){
+        axState.rly3MinTimer = 0;
+      }
+    } 
+
     break;
 
     case relay4Screen:
-    lcdPrintLines("Bedroom Lights", (axState.rly4)?"ON":"OFF");
+    if(axState.rly4MinTimer){
+      lcdPrintFloatData("Bedroom Lights", (float)axState.rly4MinTimer/60 , " hours left");
+    } else {
+      lcdPrintLines("Bedroom Lights", "are off.         ");
+    }
+
+    if(state.actionPressed){
+      axState.rly4MinTimer = axState.rly4MinTimer + 720;
+      if (axState.rly4MinTimer > 5760 ){
+        axState.rly4MinTimer = 0;
+      }
+    } 
+    
     break;
 
     case batteryScreen:
@@ -579,124 +865,147 @@ void loop() {
     break;
 
     case outdoorTempC:
-    lcdPrintFloatData("Outdoor Temp", bme1.readTempC(), " C");
+    lcdPrintFloatData("Outdoor Temp", bme1.readTempC(), "C", true);
     break;
 
     case outdoorTempF:
-    lcdPrintFloatData("Outdoor Temp", bme1.readTempF(), " F");
+    lcdPrintFloatData("Outdoor Temp", bme1.readTempF(), "F", true);
     break;
 
     case outdoorHumidity:
     lcdPrintIntData("Outdoor Humidity", bme1.readHumidity(), "%"); 
     break;
 
-    case outdoorDewpoint:
+    case outdoorDewpointC:
+    lcdPrintFloatData("Outdoor Dewpoint", state.outdoorDewPoint, "C", true);
     break;
 
-    /*
-  ,outdoorDewpoint
-  ,outdoorPressure
-  ,indoorTempC
-  ,indoorTempF
-  ,indoorHumidity
-  ,indoorDewpoint
-  ,indoorPressure
-     */
+    case outdoorDewpointF:
+    lcdPrintFloatData("Outdoor Dewpoint", (state.outdoorDewPoint * (9/5) + 32), "F", true);
+    break;
+
+    case outdoorPressure:
+    lcdPrintFloatData("Outdoor Pressure", bme1.readPressure()," hPa");
+    break;
+
+    case indoorTempC:
+    lcdPrintFloatData("Indoor Temp", bme2.readTempC(), "C", true);
+    break;
+
+    case indoorTempF:
+    lcdPrintFloatData("Indoor Temp", bme2.readTempF(), "F", true);
+    break;
+
+    case indoorHumidity:
+    lcdPrintIntData("Indoor Humidity", bme2.readHumidity(), "%"); 
+    break;
+
+    case indoorDewpointC:
+    lcdPrintFloatData("Indoor Dewpoint", state.indoorDewPoint, "C", true);
+    break;
+
+    case indoorDewpointF:
+    lcdPrintFloatData("Indoor Dewpoint", (state.indoorDewPoint * (9/5) + 32), "F", true);
+    break;
+
+    case indoorPressure:
+    lcdPrintFloatData("Indoor Pressure", bme2.readPressure()," hPa");
+    break;
+
+    case ventRunTimeScreen:
+    lcdPrintIntData("Fans have run   ", state.ventRunTimer , " times today");
+    break;
+
+    case dewPointDiffScreen:
+    lcdPrintFloatData("Dewpoint diff is", state.outdoorDewPoint - state.indoorDewPoint , "C", true);
+    break;
     
   }
-  
-  
-  
-}
 
+  state.actionPressed = false;
+  if(buttons.btnPressed){
+    lcd.clear();
 
+    //Reset key press timer
+    state.keyPressTimer = 0;
 
-void batteryCheck(){
+    //LCD Back Light ON
+    lcd.setLED2Pin(HIGH);
 
-  
-  if(voltState.battery <= opts.battCutoffVoltage){
-
-    for(int i = opts.lowBattShutdownTime; i > 0; i--){
-      lcd.clear();
-      lcdPrintIntData("LOW BATTERY!!!!!", i, " seconds left"); 
-      axState.beep = true;auxUpdate();
-      delay(100);
-      axState.beep = false;auxUpdate();
-      delay(900);
+    if(buttons.btn3){
+      state.currentScreen = state.currentScreen+1;
+    }
+    if(buttons.btn2){
+      state.currentScreen = state.currentScreen-1;
     }
 
-    //Kill everything the battery is low
-      axState.rly1 = false;
-      axState.rly2 = false;
-      axState.rly3 = false;
-      axState.rly4 = false;
-      axState.beep = false;
-      auxUpdate;
-    
-
-    do {
-      float denom = opts.battTurnOnVoltage-opts.battCutoffVoltage;
-      float numer = voltState.battery-opts.battCutoffVoltage;
-      float recoPercent = ((numer/denom)*100);
-
-      if(recoPercent<0){
-          lcd.clear();
-          lcdPrintFloatData("LOW BATTERY", voltState.battery, " volts"); 
+    if(buttons.btn8){
+      state.currentScreen = relay1Screen;
+      if(axState.rly1MinTimer){
+        axState.rly1MinTimer = 0;
       } else {
-          lcd.clear();
-          lcdPrintIntData("BATT RECOVERING", recoPercent, "% Recovered");
+        axState.rly1MinTimer = 60;
+      }
+    }
+
+    if(buttons.btn7){
+      state.currentScreen = relay2Screen;
+      if(axState.rly2MinTimer){
+        axState.rly2MinTimer = 0;
+      } else {
+        axState.rly2MinTimer = 60;
+      }
+    }
+
+    if(buttons.btn6){
+      state.currentScreen = relay3Screen;
+      if(axState.rly3MinTimer){
+        axState.rly3MinTimer = 0;
+      } else {
+        axState.rly3MinTimer = 720;
+      }
+    }
+
+    if(buttons.btn5){
+      state.currentScreen = relay4Screen;
+      if(axState.rly4MinTimer){
+        axState.rly4MinTimer = 0;
+      } else {
+        axState.rly4MinTimer = 720;
+      }
+    }
+
+    if(buttons.btn1){
+      if(state.scanMode){
+        state.scanMode = false;
+        lcd.clear();
+        lcdPrintLines("Scan Mode Off", "");
+        delay(500);
+        lcd.clear();
+      } else {
+        state.scanMode = true;
+        lcd.clear();
+        lcdPrintLines("Scan Mode On", "");
+        delay(500);
+        lcd.clear();
       }
       
-      readVcc();
-      delay(5000);
-      
-    } while(voltState.battery <= opts.battTurnOnVoltage);
+    }
 
     
+    if(buttons.btn4){
+      state.actionPressed = true;
+    }
+  
   }
+  
+  
   
 }
 
-void readVcc() {
-  // Read 1.1V reference against AVcc
-  // set the reference to Vcc and the measurement to the internal 1.1V reference
-    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-
-  delay(2); // Wait for Vref to settle
-  ADCSRA |= _BV(ADSC); // Start conversion
-  while (bit_is_set(ADCSRA,ADSC)); // measuring
-
-  uint8_t low  = ADCL; // must read ADCL first - it then locks ADCH  
-  uint8_t high = ADCH; // unlocks both
-
-  long result = (high<<8) | low;
-
-  float railVoltage = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
-
-  float railOffset = (railVoltage/1000) - 3.3;
-
-  float v12Factor = (opts.maxVoltage12+railOffset) / 3.3;
-  float v5Factor = (opts.maxVoltage5+railOffset) / 3.3;
-
-  delay(2); //wait for analog refs to settle
-  float v12Avg = 0;
-  for(int i = 0; i<20; i++){
-    v12Avg = v12Avg + analogRead(A0);
-  }
-  float v12Voltage = (v12Avg/20) * ((railVoltage/1000)*v12Factor / 1023.0);
 
 
-float v5Avg = 0;
-  for(int i = 0; i<20; i++){
-    v5Avg = v5Avg + analogRead(A1);
-  }
-  float v5Voltage = (v5Avg/20) * ((railVoltage/1000)*v5Factor / 1023.0);
 
- voltState.rail3v3 = railVoltage/1000;
- voltState.rail5v = v5Voltage;
- voltState.battery = v12Voltage;
-  
-}
 
 
 
