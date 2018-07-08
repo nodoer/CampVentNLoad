@@ -444,7 +444,7 @@ void batteryCheck(){
       axState.rly3MinTimer = 0;
       axState.rly4MinTimer = 0;
       axState.beep = false;
-      auxUpdate;
+      auxUpdate();
     
 
     do {
