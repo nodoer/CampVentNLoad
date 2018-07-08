@@ -95,7 +95,7 @@ struct options{
     int mainDelay = 2000;
   //The amount of cycles that will execute before the
   //home screen is returned with no button presses
-    int keyPressDelay = 2000;
+    int keyPressDelay = 3000;
   //12Volt Calibration value, max range of measurement
     float maxVoltage12 = 20.55;
   //5Volt Calibration value
@@ -751,7 +751,7 @@ void loop() {
   switch (state.currentScreen){
 
     case statusScreen:
-    lcdPrintLines("System ON       ", "                ");         
+    lcdPrintLines("System ON       ", (state.bypassMinTimer)?"Bypass ON       ":"                ");         
     break;
 
     case bypassScreen:
