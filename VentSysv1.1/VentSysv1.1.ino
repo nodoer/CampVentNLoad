@@ -13,6 +13,7 @@
 #include <Wire.h>
 #include "RTClib.h"
 #include "BlueDot_BME280.h"
+#include <EEPROM.h>
 
 /**********************************************
  * System Characteritics
@@ -111,7 +112,6 @@ struct options{
   //When in scan mode this is the number of cycles each screen 
   //will display for
     int scanModeDelay = 100;
-    
   //The max number of hours the vent fan can run  
     byte ventFanMaxRunTime = 6;
   
@@ -145,12 +145,15 @@ enum screen {
   ,indoorDewpointC
   ,indoorDewpointF
   ,indoorPressure
+  ,ventMaxRunTime
   ,ventRunTimeScreen
   ,dewPointDiffScreen
+  ,eepromReset
+  
   
 };
 
-byte numOfScreens = 27;
+byte numOfScreens = 28;
 
 //Operation state struct
 struct opState{
@@ -168,6 +171,8 @@ struct opState{
   byte currentMinute = 0;
   byte currentDay = 0;
   byte ventRunTimer = 0;
+  //True when editing a EEPROM value
+  bool editEEPROMMode = false;
 };
 
 typedef struct btnState BtnState;
@@ -472,6 +477,27 @@ void batteryCheck(){
   
 }
 
+void writeEEPROM(){
+  if(state.editEEPROMMode){
+    EEPROM.put(1,opts);
+    state.editEEPROMMode = false;
+  }
+}
+
+
+void resetEEPROM(){
+  lcdPrintLines("ACTION to Cancel", "SCAN to Confirm ");
+  while(!buttons.btn1){
+    readButtons();
+    if(buttons.btn4){
+      EEPROM.write(0,0);
+      lcdPrintLines("EEPROM CLEARED!!", "Press Reset Btn");
+      while(1);
+    }
+  }
+  
+}
+
 void setup() {
 
   //Set pin Modes
@@ -482,6 +508,17 @@ void setup() {
   pinMode(pinBtnSRPLoad, OUTPUT);
   pinMode(pinAuxSREn, OUTPUT);
 
+  //Read the options in from the EEPROM
+  //Address 0 is a control byte. Any value
+  //but 0 will reset the saved settings
+  //Address 1 always starts the options
+  //struct
+    if(EEPROM.read(0) != 0){
+      EEPROM.write(0,0);
+      EEPROM.put(1, opts);
+    } else {
+      EEPROM.get(1, opts);
+    }
 
   //StartUp LCD
   lcd.begin(16,2);
@@ -725,6 +762,12 @@ void loop() {
     state.keyPressTimer = 0;
     if(state.scanTimer == opts.scanModeDelay){
       state.currentScreen = state.currentScreen+1;
+
+      //Skip the following screens
+      if(state.currentScreen == eepromReset){
+        state.currentScreen = state.currentScreen+1;
+      }
+      
       state.scanTimer = 0;
       lcd.clear();
     }
@@ -846,79 +889,149 @@ void loop() {
 
     case batteryScreen:
     lcdPrintFloatData("Pb Batt Voltage", voltState.battery, " volts");
+    lcdNoAction();
     break;
 
     case fiveVoltScreen:
     lcdPrintFloatData("5 Volt Rail", voltState.rail5v, " volts");
+    lcdNoAction();
     break;
 
     case threeVoltScreen:
     lcdPrintFloatData("3v3 Volt Rail", voltState.rail3v3, " volts");
+    lcdNoAction();
     break;
 
     case battCutOutScreen:
     lcdPrintFloatData("Batt cuts off at", opts.battCutoffVoltage, " volts");
+    
+    if(state.actionPressed){
+      state.editEEPROMMode = true;
+      
+      opts.battCutoffVoltage = opts.battCutoffVoltage + 0.1;
+      if (opts.battCutoffVoltage > 12.8 ){
+        //This is dead dead for lead acid any lower and damage is very likley
+        opts.battCutoffVoltage = 11.7; 
+      }
+
+      if(opts.battTurnOnVoltage < opts.battCutoffVoltage){
+        opts.battTurnOnVoltage = opts.battCutoffVoltage + 0.5;
+      }
+      
+      
+    } 
     break;
 
     case battRecoverScreen:
     lcdPrintFloatData("Batt recovers at", opts.battTurnOnVoltage, " volts");
+
+    if(state.actionPressed){
+      state.editEEPROMMode = true;
+      
+      opts.battTurnOnVoltage = opts.battTurnOnVoltage + 0.1;
+      if (opts.battTurnOnVoltage > 14 ){
+        opts.battTurnOnVoltage = 12.4; 
+      }
+
+      if(opts.battTurnOnVoltage < opts.battCutoffVoltage){
+        opts.battTurnOnVoltage = opts.battCutoffVoltage + 0.5;
+      }
+      
+    }
+    
     break;
 
     case outdoorTempC:
     lcdPrintFloatData("Outdoor Temp", bme1.readTempC(), "C", true);
+    lcdNoAction();
     break;
 
     case outdoorTempF:
     lcdPrintFloatData("Outdoor Temp", bme1.readTempF(), "F", true);
+    lcdNoAction();
     break;
 
     case outdoorHumidity:
     lcdPrintIntData("Outdoor Humidity", bme1.readHumidity(), "%"); 
+    lcdNoAction();
     break;
 
     case outdoorDewpointC:
     lcdPrintFloatData("Outdoor Dewpoint", state.outdoorDewPoint, "C", true);
+    lcdNoAction();
     break;
 
     case outdoorDewpointF:
     lcdPrintFloatData("Outdoor Dewpoint", (state.outdoorDewPoint * (9/5) + 32), "F", true);
+    lcdNoAction();
     break;
 
     case outdoorPressure:
     lcdPrintFloatData("Outdoor Pressure", bme1.readPressure()," hPa");
+    lcdNoAction();
     break;
 
     case indoorTempC:
     lcdPrintFloatData("Indoor Temp", bme2.readTempC(), "C", true);
+    lcdNoAction();
     break;
 
     case indoorTempF:
     lcdPrintFloatData("Indoor Temp", bme2.readTempF(), "F", true);
+    lcdNoAction();
     break;
 
     case indoorHumidity:
     lcdPrintIntData("Indoor Humidity", bme2.readHumidity(), "%"); 
+    lcdNoAction();
     break;
 
     case indoorDewpointC:
     lcdPrintFloatData("Indoor Dewpoint", state.indoorDewPoint, "C", true);
+    lcdNoAction();
     break;
 
     case indoorDewpointF:
     lcdPrintFloatData("Indoor Dewpoint", (state.indoorDewPoint * (9/5) + 32), "F", true);
+    lcdNoAction();
     break;
 
     case indoorPressure:
     lcdPrintFloatData("Indoor Pressure", bme2.readPressure()," hPa");
+    lcdNoAction();
+    break;
+
+    case ventMaxRunTime:
+    lcdPrintIntData("Max fan run time", opts.ventFanMaxRunTime , " hours");
+    if(state.actionPressed){
+      state.editEEPROMMode = true;
+      
+      opts.ventFanMaxRunTime = opts.ventFanMaxRunTime + 1;
+      if (opts.ventFanMaxRunTime > 12 ){
+        opts.ventFanMaxRunTime = 1; 
+      }
+      
+    }
     break;
 
     case ventRunTimeScreen:
-    lcdPrintIntData("Fans have run   ", state.ventRunTimer , " times today");
+    lcdPrintIntData("Fans have run   ", state.ventRunTimer , " hours today");
+    lcdNoAction();
     break;
 
     case dewPointDiffScreen:
     lcdPrintFloatData("Dewpoint diff is", state.outdoorDewPoint - state.indoorDewPoint , "C", true);
+    lcdNoAction();
     break;
+
+    case eepromReset:
+    lcdPrintLines("EEPROM Reset", "Press ACTION");
+    if(state.actionPressed){
+      resetEEPROM();
+    }
+    break;
+
+
     
   }
 
@@ -933,13 +1046,17 @@ void loop() {
     lcd.setLED2Pin(HIGH);
 
     if(buttons.btn3){
+      writeEEPROM();
       state.currentScreen = state.currentScreen+1;
     }
+    
     if(buttons.btn2){
+      writeEEPROM();
       state.currentScreen = state.currentScreen-1;
     }
 
     if(buttons.btn8){
+      writeEEPROM();
       state.currentScreen = relay1Screen;
       if(axState.rly1MinTimer){
         axState.rly1MinTimer = 0;
@@ -949,6 +1066,7 @@ void loop() {
     }
 
     if(buttons.btn7){
+      writeEEPROM();
       state.currentScreen = relay2Screen;
       if(axState.rly2MinTimer){
         axState.rly2MinTimer = 0;
@@ -958,6 +1076,7 @@ void loop() {
     }
 
     if(buttons.btn6){
+      writeEEPROM();
       state.currentScreen = relay3Screen;
       if(axState.rly3MinTimer){
         axState.rly3MinTimer = 0;
@@ -967,6 +1086,7 @@ void loop() {
     }
 
     if(buttons.btn5){
+      writeEEPROM();
       state.currentScreen = relay4Screen;
       if(axState.rly4MinTimer){
         axState.rly4MinTimer = 0;
@@ -976,6 +1096,7 @@ void loop() {
     }
 
     if(buttons.btn1){
+      writeEEPROM();
       if(state.scanMode){
         state.scanMode = false;
         lcd.clear();
