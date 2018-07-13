@@ -153,7 +153,7 @@ enum screen {
   
 };
 
-byte numOfScreens = 28;
+byte numOfScreens = 29;
 
 //Operation state struct
 struct opState{
@@ -487,15 +487,152 @@ void writeEEPROM(){
 
 void resetEEPROM(){
   lcdPrintLines("ACTION to Cancel", "SCAN to Confirm ");
-  while(!buttons.btn1){
+  while(!buttons.btn4){
     readButtons();
-    if(buttons.btn4){
+    if(buttons.btn1){
       EEPROM.write(0,0);
-      lcdPrintLines("EEPROM CLEARED!!", "Press Reset Btn");
+      lcdPrintLines("SETTINGS RESTORD", "Press Reset Btn");
       while(1);
     }
   }
+  buttons.btn4 = false;
   
+}
+
+void dateTimeSet(){
+  bool next = false;
+  DateTime timeState = rtc.now();
+  int setHour = timeState.hour();
+  int setMinute = timeState.minute();
+  int setYear = timeState.year();
+  int setMonth = timeState.month();
+  int setDay = timeState.day();
+
+  lcd.clear();
+  
+  while(!next){
+    readButtons();
+    if(buttons.btn2){
+      setHour--;
+    }
+    if(buttons.btn3){
+      setHour++;
+    }
+    if(setHour > 23){
+      setHour = 0;
+    }
+    if(setHour < 0){
+      setHour = 23;
+    }
+    lcdPrintIntData("Set Hour", setHour, "");
+    if(buttons.btn4){
+      next=true;
+    }
+  }
+
+  lcd.clear();
+  next = false;
+  
+  while(!next){
+    readButtons();
+    if(buttons.btn2){
+      setMinute--;
+    }
+    if(buttons.btn3){
+      setMinute++;
+    }
+    if(setMinute > 59){
+      setMinute = 0;
+    }
+    if(setMinute < 0){
+      setMinute = 59;
+    }
+    lcdPrintIntData("Set Minute", setMinute, "");
+    if(buttons.btn4){
+      next=true;
+    }
+  }
+
+  lcd.clear();
+  next = false;
+  
+  while(!next){
+    readButtons();
+    if(buttons.btn2){
+      setYear--;
+    }
+    if(buttons.btn3){
+      setYear++;
+    }
+    if(setYear < 2018){
+      setYear = 2018;
+    }
+    lcdPrintIntData("Set Year", setYear, "");
+    if(buttons.btn4){
+      next=true;
+    }
+  }
+
+  
+  lcd.clear();
+  next = false;
+  
+  while(!next){
+    readButtons();
+    if(buttons.btn2){
+      setMonth--;
+    }
+    if(buttons.btn3){
+      setMonth++;
+    }
+    if(setMonth > 12){
+      setMonth = 1;
+    }
+    if(setMonth < 1){
+      setMonth = 12;
+    }
+    
+    lcdPrintIntData("Set Month", setMonth, "");
+    if(buttons.btn4){
+      next=true;
+    }
+  }
+
+
+  
+  lcd.clear();
+  next = false;
+  
+  while(!next){
+    readButtons();
+    if(buttons.btn2){
+      setDay--;
+    }
+    if(buttons.btn3){
+      setDay++;
+    }
+    if(setDay > 31){
+      setDay = 1;
+    }
+    if(setDay < 1){
+      setDay = 31;
+    }
+    lcdPrintIntData("Set Day", setDay, "");
+    if(buttons.btn4){
+      next=true;
+    }
+  }
+  
+  lcd.clear();
+  next = false;
+
+  DateTime newTime(setYear,setMonth,setDay,setHour,setMinute,0);
+  rtc.adjust(newTime);
+
+  state.actionPressed = false;
+  state.currentScreen = 0;
+  
+    
 }
 
 void setup() {
@@ -708,6 +845,7 @@ void beep(int beepLen){
 
 void lcdNoAction(){
   if(state.actionPressed){
+    lcd.clear();
     lcdPrintLines("No action on", "this screen.");
     delay(500);
     lcd.clear();
@@ -815,12 +953,16 @@ void loop() {
 
     case dateScreen:
     lcdPrintDate();
-    lcdNoAction();
+    if(state.actionPressed){
+      dateTimeSet();
+    }
     break;
 
     case timeScreen:
     lcdPrintTime();
-    lcdNoAction();
+    if(state.actionPressed){
+      dateTimeSet();
+    }
     break;
 
     case relay1Screen:
@@ -1025,7 +1167,7 @@ void loop() {
     break;
 
     case eepromReset:
-    lcdPrintLines("EEPROM Reset", "Press ACTION");
+    lcdPrintLines("Factory settings", "press ACTION");
     if(state.actionPressed){
       resetEEPROM();
     }
