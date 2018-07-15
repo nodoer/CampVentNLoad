@@ -114,6 +114,8 @@ struct options{
     int scanModeDelay = 100;
   //The max number of hours the vent fan can run  
     byte ventFanMaxRunTime = 6;
+  //The dew point difference in degrees c needed before turning on fans
+    byte dewPointDiff = 3;
   
   
 };
@@ -148,12 +150,13 @@ enum screen {
   ,ventMaxRunTime
   ,ventRunTimeScreen
   ,dewPointDiffScreen
+  ,dewPointDiffSetScreen
   ,eepromReset
   
   
 };
 
-byte numOfScreens = 29;
+byte numOfScreens = 30;
 
 //Operation state struct
 struct opState{
@@ -233,6 +236,19 @@ void lcdPrintFloatData(char line1[16], float data, char units[11], bool isTemp =
       lcd.print(units);
 }
 
+
+void lcdPrintLgFloatData(char line1[16], float data, char units[9], bool isTemp = false){
+      dtostrf(data, 5, 1, strFlt);
+      lcd.setCursor(0,0);
+      lcd.print(line1);
+      lcd.setCursor(0,1);
+      lcd.print(strFlt);
+      lcd.setCursor(6,1);
+      if(isTemp){
+        lcd.print((char)223);
+      }
+      lcd.print(units);
+}
 void lcdPrintIntData(char line1[16], int data, char units[12]){
       lcd.setCursor(0,0);
       lcd.print(line1);
@@ -645,6 +661,19 @@ void setup() {
   pinMode(pinBtnSRPLoad, OUTPUT);
   pinMode(pinAuxSREn, OUTPUT);
 
+    //Init the SR for Relay and Buzzer
+  digitalWrite(pinAuxSREn, HIGH); 
+  digitalWrite(pinSRClock,HIGH);
+  digitalWrite(pinSRDataOut,LOW);
+   
+  digitalWrite(pinAuxSREn, LOW);
+  shiftOut(pinSRDataOut, pinSRClock, MSBFIRST, B11111111);    
+  digitalWrite(pinAuxSREn, HIGH);  
+  digitalWrite(pinAuxSREn, LOW);
+  shiftOut(pinSRDataOut, pinSRClock, MSBFIRST, B00001111);    
+  digitalWrite(pinAuxSREn, HIGH);  
+
+
   //Read the options in from the EEPROM
   //Address 0 is a control byte. Any value
   //but 0 will reset the saved settings
@@ -684,14 +713,6 @@ void setup() {
   bme1.parameter.tempOutsideFahrenheit = 59;            //default value of 59°F
   bme2.parameter.tempOutsideFahrenheit = 59;            //default value of 59°F
   
-
-  //Init the SR for Relay and Buzzer
-  digitalWrite(pinAuxSREn, LOW);
-  shiftOut(pinSRDataOut , pinSRClock, MSBFIRST, B00001111);    
-  digitalWrite(pinAuxSREn, HIGH); 
-
-  
-
   // Print a message to the LCD.
   lcd.clear();
   lcdPrintLines("Shiroda Power Co", "2018        V1.0");
@@ -883,7 +904,7 @@ void loop() {
   if (!state.bypassMinTimer && opts.ventFanMaxRunTime != state.ventRunTimer){
 
     //Added one to make the transition more stable
-    if((state.outdoorDewPoint+1) < state.indoorDewPoint 
+    if((state.outdoorDewPoint+opts.dewPointDiff) < state.indoorDewPoint 
         && !axState.rly1MinTimer
         && !axState.rly2MinTimer){
 
@@ -1109,7 +1130,7 @@ void loop() {
     break;
 
     case outdoorPressure:
-    lcdPrintFloatData("Outdoor Pressure", bme1.readPressure()," hPa");
+    lcdPrintLgFloatData("Outdoor Pressure", bme1.readPressure()," hPa");
     lcdNoAction();
     break;
 
@@ -1139,7 +1160,7 @@ void loop() {
     break;
 
     case indoorPressure:
-    lcdPrintFloatData("Indoor Pressure", bme2.readPressure()," hPa");
+    lcdPrintLgFloatData("Indoor Pressure", bme2.readPressure()," hPa");
     lcdNoAction();
     break;
 
@@ -1164,6 +1185,20 @@ void loop() {
     case dewPointDiffScreen:
     lcdPrintFloatData("Dewpoint diff is", state.outdoorDewPoint - state.indoorDewPoint , "C", true);
     lcdNoAction();
+    break;
+
+    
+    case dewPointDiffSetScreen:
+    lcdPrintIntData("Fans auto on at ", opts.dewPointDiff , "C dew diff");
+    if(state.actionPressed){
+      state.editEEPROMMode = true;
+      
+      opts.dewPointDiff = opts.dewPointDiff + 1;
+      if (opts.dewPointDiff > 10 ){
+        opts.dewPointDiff = 1; 
+      }
+      
+    }
     break;
 
     case eepromReset:
